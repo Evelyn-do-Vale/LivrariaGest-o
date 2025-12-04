@@ -10,7 +10,7 @@ export default class VendaController {
         parcelas: number = 1,
         boleto?: Boleto
     ) {
-        return VendaService.criar(compra, itens, parcelas, boleto);
+        return VendaService.criar(compra, itens, parcelas);
     }
 
     static async listar() { 

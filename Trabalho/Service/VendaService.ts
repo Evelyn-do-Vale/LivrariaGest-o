@@ -82,7 +82,7 @@ export default class VendaService {
                 vendaCompleta.id_funcionario,
                 vendaCompleta.metodo,
                 vendaCompleta.valor_total,
-                vendaCompleta.data.toISOString()
+                vendaCompleta.data.toLocaleDateString("pt-BR")
             ]
         );
 
