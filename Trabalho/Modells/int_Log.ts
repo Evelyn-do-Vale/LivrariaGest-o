@@ -2,8 +2,7 @@ interface Log {
     id?: number;
     tipo: string;
     descricao: string;
-    id_usuario: number;
-    id_funcionario: number;
+    id_cliente: number;
     data: Date;
 }
 

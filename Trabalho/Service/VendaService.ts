@@ -1,38 +1,41 @@
-import VendaRepo from "../Repository/VendaRepo";
-import CompraLivroRepo from "../Repository/CompraLivroRepo";
-import LivroRepo from "../Repository/LivroRepo";
-import UsuarioRepo from "../Repository/UsuarioRepo";
-import LogRepo from "../Repository/LogRepo";
-import BoletoRepo from "../Repository/BoletoRepo";
+import { bancoPronto, dbPromisse } from "../bd";
 import { Compra } from "../Modells/int_Compra";
 import { CompraLivro } from "../Modells/int_CompraLivro";
 import TipoPagamento from "../Modells/enu_TipoPagamento";
-import { Boleto } from "../Modells/Int_Boleto";
-import { dbPromisse } from "../bd";
+import LogService from "./LogService";
+import BoletoService from "./BoletoService";
+import { StatusBoleto } from "../Modells/enu_Status_Boleto";
 
 export default class VendaService {
+
     static async criar(
         compra: Omit<Compra, "valor_total" | "data">,
         itens: { id_livro: number; quantidade: number }[],
-        parcelas: number = 1,
-        boleto?: Boleto
+        parcelas: number = 1
     ) {
-        const usuario = compra.id_usuario
-            ? await UsuarioRepo.findById(compra.id_usuario)
+        await bancoPronto;
+        const db = await dbPromisse;
+
+        // validar cliente
+        const cliente = compra.id_cliente
+            ? await db.get(`SELECT * FROM clientes WHERE id = ?`, [compra.id_cliente])
             : null;
 
-        if (!usuario) throw new Error("Usuário não encontrado");
-
+        if (!cliente) throw new Error("Cliente não encontrado");
         if (!compra.id_funcionario)
             throw new Error("Compra precisa de um funcionário");
 
+        // cálculo subtotal
         let subtotal = 0;
         const livrosDetalhados: CompraLivro[] = [];
 
         for (const item of itens) {
-            const livro = await LivroRepo.findById(item.id_livro);
-            if (!livro) throw new Error(`Livro id=${item.id_livro} não encontrado`);
+            const livro = await db.get(
+                `SELECT * FROM livros WHERE id = ?`,
+                [item.id_livro]
+            );
 
+            if (!livro) throw new Error(`Livro id=${item.id_livro} não encontrado`);
             if (livro.quantidade < item.quantidade)
                 throw new Error(`Estoque insuficiente para o livro ${livro.titulo}`);
 
@@ -42,18 +45,16 @@ export default class VendaService {
                 id_compra: 0,
                 id_livro: item.id_livro,
                 quantidade: item.quantidade,
-                preco_unitario: livro.preco,
+                preco_unitario: livro.preco
             });
         }
 
+        // regras pagamento
         let valorFinal = subtotal;
 
         switch (compra.metodo) {
             case TipoPagamento.Pix:
-                valorFinal *= 0.95;
-                break;
-
-            case TipoPagamento.Debito:
+                valorFinal = Number((valorFinal * 0.95).toFixed(2))
                 break;
 
             case TipoPagamento.Credito:
@@ -62,58 +63,87 @@ export default class VendaService {
                 break;
 
             case TipoPagamento.Boleto:
-                if (!boleto)
-                    throw new Error("Boleto obrigatório para este pagamento");
-
-                if (boleto.data_pagamento && boleto.data_pagamento > boleto.data_vencimento) {
-                    const diasAtraso = Math.floor(
-                        (boleto.data_pagamento.getTime() - boleto.data_vencimento.getTime()) /
-                        (1000 * 60 * 60 * 24)
-                    );
-                    valorFinal += subtotal * 0.02 + subtotal * 0.001 * diasAtraso;
-                }
+                // boleto é gerado DEPOIS da compra existir
                 break;
         }
 
-        const compraCriada: Compra = {
+        // registrar venda
+        const vendaCompleta: Compra = {
             ...compra,
             valor_total: valorFinal,
             data: new Date()
         };
 
-        const compraId = await VendaRepo.create(compraCriada);
-
-        if (!compraId && compraId !== 0) {
-            throw new Error("Falha ao criar a compra (id inválido).");
-        }
-        const compraIdNum = Number(compraId);
-
-        for (const item of livrosDetalhados) {
-            item.id_compra = compraIdNum;
-            await CompraLivroRepo.create(item);
-
-            await LivroRepo.diminuirEstoque(item.id_livro, item.quantidade);
-        }
-
-        if (compra.metodo === TipoPagamento.Boleto && boleto) {
-            (boleto as any).id_venda = compraIdNum;
-            await BoletoRepo.create(boleto);
-        }
-
-        const usuarioIdParaLog = usuario.id ?? null;
-        await LogRepo.create(
-            usuarioIdParaLog,
-            `Compra realizada id=${compraIdNum} total=${valorFinal.toFixed(2)}`
+        const vendaResult = await db.run(
+            `INSERT INTO vendas (id_cliente, id_funcionario, metodo, valor_total, data)
+             VALUES (?, ?, ?, ?, ?)`,
+            [
+                vendaCompleta.id_cliente,
+                vendaCompleta.id_funcionario,
+                vendaCompleta.metodo,
+                vendaCompleta.valor_total,
+                vendaCompleta.data.toISOString()
+            ]
         );
 
-        return compraIdNum;
+        const id_compra = vendaResult.lastID;
+        if (!id_compra && id_compra !== 0)
+            throw new Error("Falha ao criar a compra");
+
+        // registrar itens + estoque
+        for (const item of livrosDetalhados) {
+            item.id_compra = id_compra;
+
+            await db.run(
+                `INSERT INTO compra_livro (id_compra, id_livro, quantidade, preco_unitario)
+                 VALUES (?, ?, ?, ?)`,
+                [id_compra, item.id_livro, item.quantidade, item.preco_unitario]
+            );
+
+            const livroAtual = await db.get(
+                `SELECT quantidade FROM livros WHERE id = ?`,
+                [item.id_livro]
+            );
+
+            const novoEstoque = Number(livroAtual.quantidade) - item.quantidade;
+
+            await db.run(
+                `UPDATE livros SET quantidade = ? WHERE id = ?`,
+                [novoEstoque, item.id_livro]
+            );
+        }
+
+        // criar boleto APÓS a venda existir
+        if (compra.metodo === TipoPagamento.Boleto) {
+            const hoje = new Date();
+            const venc = new Date();
+            venc.setDate(hoje.getDate() + 7);
+
+            await BoletoService.criar({
+                id_compra: id_compra,
+                data_emissao: hoje,
+                data_vencimento: venc,
+                data_pagamento: null,
+                status: StatusBoleto.Pendente,
+                valor: valorFinal
+            }, id_compra);
+        }
+
+        await LogService.create(
+            cliente.id,
+            `Compra realizada id=${id_compra} total=${valorFinal.toFixed(2)}`
+        );
+
+        return id_compra;
     }
 
-    static listar() {
-        return VendaRepo.findAll();
+    static async listar() {
+        const db = await dbPromisse;
+        return db.all(`SELECT * FROM vendas ORDER BY id DESC`);
     }
 
-    static buscar(id: number) {
-        return VendaRepo.findById(id);
+    static async buscar(id: number) {
+        const db = await dbPromisse;
+        return db.get(`SELECT * FROM vendas WHERE id = ?`, [id]);
     }
 }

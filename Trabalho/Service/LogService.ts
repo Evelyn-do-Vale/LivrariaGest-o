@@ -1,16 +1,17 @@
-import { dbPromisse } from "../bd";
+import { bancoPronto, dbPromisse } from "../bd";
 import Log from "../Modells/int_Log";
 
-export default class LogRepo {
+export default class LogService {
 
-    static async create(usuarioId: number | null, acao: string) {
+    static async create(id_cliente: number | null, acao: string) {
+        await bancoPronto;
         const db = await dbPromisse;
 
         const data_hora = new Date().toLocaleDateString("pt-BR");
 
         const res = await db.run(
-            `INSERT INTO logs (usuario_id, acao, data_hora) VALUES (?, ?, ?)`,
-            [usuarioId, acao, data_hora]
+            `INSERT INTO logs (cliente_id, acao, data_hora) VALUES (?, ?, ?)`,
+            [id_cliente, acao, data_hora]
         );
 
         return res.lastID;
@@ -24,12 +25,12 @@ export default class LogRepo {
         );
     }
 
-    static async findByUsuario(usuarioId: number): Promise<Log[]> {
+    static async findByCliente(cliente_id: number): Promise<Log[]> {
         const db = await dbPromisse;
 
         return db.all<Log[]>(
-            `SELECT * FROM logs WHERE usuario_id = ? ORDER BY id DESC`,
-            [usuarioId]
+            `SELECT * FROM logs WHERE cliente_id = ? ORDER BY id DESC`,
+            [cliente_id]
         );
     }
 }

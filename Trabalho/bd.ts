@@ -1,17 +1,21 @@
 import sqlite3 from "sqlite3";
 import { open } from "sqlite";
+import path from "path";
+import { fileURLToPath } from "url";
 
-export const dbPromisse = await open({
-    filename: "database.sqlite",
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export const dbPromisse = open({
+    filename: path.resolve(__dirname, "Repository", "database.sqlite"),
     driver: sqlite3.Database
 });
 
-export async function initDB() {
-    const db = await dbPromisse;
+export const bancoPronto = dbPromisse.then(async (db) => {
     await db.exec("PRAGMA foreign_keys = ON;");
 
     await db.exec(`
-        CREATE TABLE IF NOT EXISTS usuarios (
+        CREATE TABLE IF NOT EXISTS clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nome TEXT NOT NULL,
             email TEXT NOT NULL,
@@ -23,10 +27,10 @@ export async function initDB() {
     await db.exec(`
         CREATE TABLE IF NOT EXISTS logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario_id INTEGER,
+            cliente_id INTEGER,
             acao TEXT NOT NULL,
             data_hora TEXT NOT NULL,
-            FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE SET NULL
+            FOREIGN KEY (cliente_id) REFERENCES clientes(id) ON DELETE SET NULL
         );
     `);
 
@@ -55,14 +59,12 @@ export async function initDB() {
     await db.exec(`
         CREATE TABLE IF NOT EXISTS vendas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_usuario INTEGER,
-            id_livro INTEGER,
+            id_cliente INTEGER,
             id_funcionario INTEGER,
             metodo TEXT NOT NULL,
             valor_total REAL NOT NULL,
             data TEXT,
-            FOREIGN KEY (id_usuario) REFERENCES usuarios(id) ON DELETE SET NULL,
-            FOREIGN KEY (id_livro) REFERENCES livros(id) ON DELETE SET NULL,
+            FOREIGN KEY (id_cliente) REFERENCES clientes(id) ON DELETE SET NULL,
             FOREIGN KEY (id_funcionario) REFERENCES funcionarios(id) ON DELETE SET NULL
         );
     `);
@@ -74,6 +76,7 @@ export async function initDB() {
             data_emissao TEXT NOT NULL,
             data_vencimento TEXT NOT NULL,
             data_pagamento TEXT,
+            status TEXT NOT NULL,
             valor REAL NOT NULL,
             FOREIGN KEY (id_compra) REFERENCES vendas(id)
         );
@@ -107,4 +110,4 @@ export async function initDB() {
             FOREIGN KEY (id_livro) REFERENCES livros(id) ON DELETE CASCADE
         );
     `);
-}
+})

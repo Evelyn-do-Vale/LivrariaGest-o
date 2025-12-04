@@ -1,4 +1,4 @@
-interface Usuario {
+interface Cliente {
     id?: number;
     nome: string;
     senha: string;
@@ -6,4 +6,4 @@ interface Usuario {
     data_criacao: Date;
 }
 
-export default Usuario;
+export default Cliente;
